@@ -6,9 +6,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "tsx --env-file=.env src/index.ts",
-    "test:telegram": "tsx --env-file=.env src/index.ts --test",
-    "verify": "tsx --env-file=.env src/verify.ts",
+    "start": "tsx --env-file-if-exists=.env src/index.ts",
+    "test:telegram": "tsx --env-file-if-exists=.env src/index.ts --test",
+    "verify": "tsx --env-file-if-exists=.env src/verify.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
