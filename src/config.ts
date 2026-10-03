@@ -16,6 +16,12 @@ function num(name: string, def: number): number {
 
 const addr = (name: string, def: string) => (env(name) ?? def).toLowerCase() as Address;
 
+const addrs = (name: string, def: string) =>
+  (env(name) ?? def)
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean) as Address[];
+
 const gradMultiple = num("GRAD_MULTIPLE", 10);
 
 // Required values are getters so `--test` only needs the Telegram vars.
@@ -42,16 +48,17 @@ export const config = {
   initializer: addr("INITIALIZER", "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"), // DopplerHookInitializer
   poolManager: addr("POOL_MANAGER", "0x8366a39cc670b4001a1121b8f6a443a643e40951"),
   // Airlock getAssetData().integrator is the only field that separates the pads (same initializer).
+  // Comma-separated lists. Bankr's was confirmed against api.bankr.bot/token-launches/<token>.
   integrators: {
-    long: addr("LONG_INTEGRATOR", "0x92d435c96e63c43e12d6d0ab28f6b0b04072f765"),
-    bankr: addr("BANKR_INTEGRATOR", "0xae478d7652b1ca5da070aa8563fce1570b420db5"),
+    long: addrs("LONG_INTEGRATOR", "0x92d435c96e63c43e12d6d0ab28f6b0b04072f765"),
+    bankr: addrs("BANKR_INTEGRATOR", "0xf60633d02690e2a15a54ab919925f3d038df163e"),
   },
 
   links: {
     long: {
       chart: env("LONG_CHART_URL") ?? "https://dexscreener.com/robinhood/{token}",
       explorer: env("LONG_EXPLORER_URL") ?? "https://robinhoodchain.blockscout.com/token/{token}",
-      site: env("LONG_SITE_URL") ?? "https://app.long.xyz/token/{token}",
+      site: env("LONG_SITE_URL") ?? "", // token page path unknown (/token/<addr> is a 404); set LONG_SITE_URL once known
     },
     bankr: {
       chart: env("BANKR_CHART_URL") ?? "https://dexscreener.com/robinhood/{token}",

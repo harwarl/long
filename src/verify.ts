@@ -44,14 +44,14 @@ try {
   }
   console.log("\nlaunches by integrator:");
   for (const [i, e] of [...byIntegrator].sort((a, b) => b[1].n - a[1].n)) {
-    const pad = i === config.integrators.long ? "← LONG" : i === config.integrators.bankr ? "← BANKR" : "";
+    const pad = config.integrators.long.includes(i as Address) ? "← LONG" : config.integrators.bankr.includes(i as Address) ? "← BANKR" : "";
     console.log(`  ${i} ×${e.n} initializers=${[...e.init].join(",")} ${pad}`);
   }
 
   for (const pad of ["long", "bankr"] as const) {
-    const e = byIntegrator.get(config.integrators[pad]);
+    const e = config.integrators[pad].map((i) => byIntegrator.get(i)).find((x) => x?.sample);
     if (!e?.sample) {
-      console.log(`\n✗ ${pad}: no launches from integrator ${config.integrators[pad]} in range; try --blocks`);
+      console.log(`\n✗ ${pad}: no launches from integrator(s) ${config.integrators[pad].join(",")} in range; try --blocks`);
       continue;
     }
     const s = await initializerState(rpc, config.initializer, e.sample);

@@ -104,8 +104,8 @@ export class LaunchWatcher extends Watcher {
   // --- launches ---
 
   private padOf(integrator: Address): Pad | undefined {
-    if (integrator === config.integrators.long) return "long";
-    if (integrator === config.integrators.bankr) return "bankr";
+    if (config.integrators.long.includes(integrator)) return "long";
+    if (config.integrators.bankr.includes(integrator)) return "bankr";
   }
 
   private async onCreate(l: RpcLog) {

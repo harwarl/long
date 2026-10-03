@@ -25,8 +25,10 @@ pnpm start
 
 | Integrator | Pad | Notes |
 | --- | --- | --- |
-| `0x92d435c9…f765` | Long | Stock-token numeraires (NVDA, SPY, TSLA…). Addresses end in `1e18`. Sent through launcher `0x1eef…2104`, which emits `LaunchCreated` (gives the creator) |
-| `0xae478d76…0db5` | Bankr | Same integrator as on Base. WETH, USDG or stock numeraires. Sent through the ERC-4337 EntryPoint |
+| `0x92d435c9…f765` | Long | Stock-token numeraires (NVDA, SPY, TSLA…). Addresses end in `1e18`. Sent through launcher `0x1eef…2104`, which emits the same `LaunchCreated` event as the verified `LongLauncher`. Not confirmed against long.xyz itself (its API is behind Cloudflare) |
+| `0xf60633d0…163e` | Bankr | Confirmed: every sampled token appears in `api.bankr.bot/token-launches/<token>` with `"chain":"robinhood"`. WETH, BNKR or stock numeraires. Addresses end in `ba3`. Sent straight to the Airlock from creator wallets |
+
+`0xae478d76…0db5`, which an earlier version of this bot wrongly treated as Bankr, is not Bankr: none of its tokens appear in Bankr's API on either chain.
 
 Everything else on the Airlock (about a fifth of launches) is ignored.
 
