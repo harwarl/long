@@ -2,7 +2,7 @@ import { config } from "./config";
 import { errMsg, log, sleep } from "./log";
 import { WssRpc, type RpcLog } from "./rpc";
 import type { Store } from "./state";
-import type { Chain, Graduated } from "./types";
+import type { Graduated } from "./types";
 
 export type Emit = (g: Graduated) => void;
 
@@ -23,14 +23,14 @@ export abstract class Watcher {
   private seen = new Set<string>();
 
   constructor(
-    readonly chain: Chain,
+    readonly chain: string,
     url: string,
     protected store: Store,
     protected emit: Emit,
   ) {
     this.rpc = new WssRpc(chain, url, () => this.setup(), config.getLogsChunk);
     this.rpc.onHead = (n) => {
-      if (this.live && this.queued === 0) this.store.setLastBlock(chain, n - HEAD_LAG);
+      if (this.live && this.queued === 0) this.store.setLastBlock(n - HEAD_LAG);
     };
   }
 
@@ -42,7 +42,7 @@ export abstract class Watcher {
     this.rpc.stop();
   }
 
-  abstract trackedCount(): number;
+  abstract trackedCount(): string;
   protected abstract subscribeLive(): Promise<void>;
   /** Fetch and process (via processNow) everything in [from, to]. */
   protected abstract backfill(from: number, to: number): Promise<void>;
@@ -73,7 +73,7 @@ export abstract class Watcher {
       .finally(() => {
         this.queued--;
         // -1: another log in the same block may still be unprocessed
-        if (live) this.store.setLastBlock(this.chain, Number(l.blockNumber) - 1);
+        if (live) this.store.setLastBlock(Number(l.blockNumber) - 1);
       });
     return this.queue;
   }
@@ -97,7 +97,7 @@ export abstract class Watcher {
     this.buffer = [];
     await this.subscribeLive();
     const head = await this.rpc.blockNumber();
-    const last = this.store.lastBlock(this.chain);
+    const last = this.store.lastBlock;
     if (last > 0 && last < head) {
       const from = Math.max(last + 1, head - config.maxBackfillBlocks);
       if (from > last + 1) log(this.chain, "backfill", `capped: skipping ${last + 1} → ${from - 1}`);
@@ -105,7 +105,7 @@ export abstract class Watcher {
       await this.backfill(from, head);
     }
     await this.queue;
-    this.store.setLastBlock(this.chain, head);
+    this.store.setLastBlock(head);
     this.live = true;
     const buffered = this.buffer;
     this.buffer = [];

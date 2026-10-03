@@ -1,45 +1,70 @@
-# Grad Bot: Long + Bankr
+# Grad Bot: Long + Bankr (Robinhood Chain)
 
-Implements [bot.md](bot.md). Node ≥ 22 (uses the built-in WebSocket), one process.
+Implements [bot.md](bot.md), adjusted to what the contracts on Robinhood Chain actually do. Node ≥ 22 (built-in WebSocket), one process, one WSS connection.
 
 ```sh
-npm install
+pnpm install
 cp .env.example .env        # fill it in
-npm run test:telegram       # build step 1: one test post to each channel
-npm run verify              # check signatures / addresses against live chains
-npm start
+pnpm run test:telegram      # sample post (with buttons) to each channel
+pnpm run verify             # live check: topics, pad attribution, pool status, hook flags
+pnpm start
 ```
 
 | File | Role |
 | --- | --- |
-| `src/rpc.ts` | WSS JSON-RPC: backoff reconnect, newHeads heartbeat (30s), chunked `getLogs` |
-| `src/watcher.ts` | Shared per-chain loop: subscribe (buffered), backfill `lastBlock+1 → head`, drain, go live; dedup + serial processing |
-| `src/long.ts` | Factory `Created` → track; Airlock `Migrate` → graduated; epochEnd+30s fallback |
-| `src/bankr.ts` | Airlock `Create` (Bankr-filtered) → track pool; PoolManager `Swap` → curve / mcap rule |
+| `src/rpc.ts` | WSS JSON-RPC: backoff reconnect, newHeads heartbeat (30s), chunked `getLogs` that halves on errors |
+| `src/watcher.ts` | Per-connection loop: subscribe (buffered), backfill `lastBlock+1 → head`, drain, go live; dedup and serial processing |
+| `src/launches.ts` | Airlock `Create` → attribute to Long/Bankr → track pool; PoolManager `Swap` → graduation rule; `Graduate`/`Migrate` as extra signals |
 | `src/telegram.ts` | One queue per channel, 1/s and 20/min each, ~30/s global, per-channel 429 handling |
-| `src/state.ts` | `state.json`: atomic write, flushed every 5s and on SIGINT/SIGTERM |
-| `src/verify.ts` | Prints topic0s, live topic counts, Bankr initializer census, sample `getState` |
+| `src/state.ts` | `state.json`: atomic write, flushed every 5s and on SIGINT/SIGTERM; migrates the old two-chain state |
+| `src/verify.ts` | The bot.md verify checklist against the live chain |
 
-## Before going live
+## How it decides
 
-`npm run verify` covers the checklist in bot.md:
+**Attribution.** Long and Bankr both launch through the shared Airlock using the same `DopplerHookInitializer` (`0x4e34…a544`). The initializer can't tell them apart. The Airlock's stored `integrator` can:
 
-- **Topics**: shows whether `Created`, `Migrate` (Long) and `Create` (Base) were actually seen in the last N blocks (`-- --blocks 100000` for more).
-- **Bankr filter**: lists every initializer on the shared Base Airlock and flags the ones matching `0xd59ce43…` / `0xA36715d…`. Put the full addresses in `BANKR_INITIALIZERS`. Optionally set `BANKR_INTEGRATOR`, which is matched against launch tx calldata.
-- **Final curve tick**: assumes the upstream Doppler `getState(asset)` getter on the multicurve initializer, returning `farTick`. Verify confirms it decodes. If it doesn't, Bankr launches get logged as "getState failed" and are not tracked.
-- **Robinhood Chain**: prints the chain ID and confirms `eth_subscribe` works.
-- **Button URLs**: the Robinhood explorer, Long, Dexscreener-Robinhood and Bankr URL templates are guesses. Override them in `.env`.
+| Integrator | Pad | Notes |
+| --- | --- | --- |
+| `0x92d435c9…f765` | Long | Stock-token numeraires (NVDA, SPY, TSLA…). Addresses end in `1e18`. Sent through launcher `0x1eef…2104`, which emits `LaunchCreated` (gives the creator) |
+| `0xae478d76…0db5` | Bankr | Same integrator as on Base. WETH, USDG or stock numeraires. Sent through the ERC-4337 EntryPoint |
 
-## Notes / deviations
+Everything else on the Airlock (about a fifth of launches) is ignored.
 
-- The live subscription is opened *before* backfill and buffered, instead of after it. This closes the gap between the two; the overlap is deduped.
-- Long fallback: at epochEnd+30s, look for a missed `Migrate` for the token, then compare `getAssetData` with its value at creation. Retry every 60s for 10 min, then drop. `LONG_POST_ON_EPOCH_END=true` posts on time alone.
-- `txHash` is omitted when a Long graduation was inferred from state rather than a log.
-- MC is shown only when the Bankr numeraire is WETH or USDC. About a third of Bankr launches pair with ZORA (`0x1111…afc69`). Those get no MC line, and in `mcap` mode they never graduate. `curve` mode is unaffected.
+**Graduation.** Graduation fires when the token's price, in its numeraire, reaches `GRAD_MULTIPLE`× its launch price:
+- The launch price is the pool's initial tick, read from the `Initialize` log in the launch tx, so catch-up runs stay correct.
+- The rule is checked on every PoolManager `Swap` for a tracked pool.
+- Swaps in the first 10s after launch are ignored.
 
-## Verified on live Base (2026-10-02)
+These on-chain signals are also watched. The first signal wins, and dedup collapses the rest:
+- `Graduate(asset)` from the initializer
+- `Migrate(asset)` from the Airlock
+- tick reaching `farTick`
 
-- Initializer `0xd59ce43e…` is used only by integrator `0xae478d76…`. Every launch went through ERC-4337 smart wallets. The other active initializer (`0xbdf93814…`) serves six other integrators, so the filter is clean.
-- `getState` decodes. The computed poolIds resolve to live pools in StateView. The tick direction toward `farTick` matches `isToken0` on all 40 pools sampled.
-- End to end with Telegram stubbed: backfill, then track, then a Swap triggers graduation and a formatted post. MC matched Dexscreener. Restarting resumed from `lastBlock` with no repost. Reconnects after a heartbeat timeout and a subscribe timeout recovered on their own.
-- Not yet tested: Long / Robinhood Chain (needs an RPC) and real Telegram delivery (needs a token).
+## Verified on live Robinhood Chain (2026-10-03)
+
+- Chain ID is 4663, and `eth_subscribe` works on the pocket.network endpoint.
+- **bot.md doesn't match the verified contracts (Sourcify):**
+  - `0x22e9…eeed` is `LongLauncher`. It emits `LaunchCreated`, not `Created`, and has no epochs. It has had no launches in the last 22h+.
+  - The epoch model came from a third-party doc (Mobula).
+- **No on-chain graduation is possible right now:**
+  - Every Long and Bankr pool sampled is `Locked`.
+  - Both pads' doppler hooks have flags `3`, which lacks `ON_GRADUATION_FLAG` (4), so `graduate()` always reverts.
+  - `Airlock.migrate()` needs `Initialized`, so `Migrate` can't fire either.
+  - Long's `farTick` is −887256 (minimum tick), and Bankr's is about 547k ticks away.
+  - In 22h there were 0 `Graduate` and 0 `Migrate` events.
+- **Provider limits (pocket.network):**
+  - Ranges older than roughly the last 50–100k blocks are capped at 1001 blocks per query.
+  - Filters with more than about 5 topic values are rejected. So the bot takes every PoolManager `Swap` (about 12/s) and matches PoolIds locally.
+- **End to end with Telegram stubbed:**
+  - Backfill → attribution → tracking → swap → post works, including creator and paired symbol. Tested at 1.01×.
+  - Old state migrated cleanly.
+  - Subscribe timeouts recovered on their own.
+- **Trading activity is thin:**
+  - Across ~150 Long/Bankr launches over 2.8h, the best had reached 1.06×, and most had never traded.
+  - At the default 10×, expect posts to be rare.
+
+## Notes
+
+- The Robinhood block time is about 0.1s. A full `MAX_BACKFILL_BLOCKS` catch-up (100k blocks, about 2.8h) takes about 5 minutes.
+- Old `.env` keys (`BASE_WSS_URL`, `BANKR_GRAD_MODE`, `BANKR_MCAP_USD`, `BANKR_INITIALIZERS`) are ignored. `BANKR_TRACK_TTL_HOURS` still works as a fallback for `TRACK_TTL_HOURS`.
+- There's no MC line: the multiple rule needs no USD prices.

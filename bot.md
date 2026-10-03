@@ -1,4 +1,4 @@
-# Grad Bot: Long + Bankr
+<!-- # Grad Bot: Long + Bankr
 
 Telegram bot that watches two launchpads over WSS RPC and posts graduated tokens. Long and Bankr each post to their own channel.
 
@@ -218,4 +218,244 @@ MC: $123k
 4. Bankr `Create` sub + Bankr-only filter.
 5. Bankr `Swap` tracking + the graduation rule.
 6. Reconnect/backfill and dedup hardening.
-7. Run against live chains with both pads posting to private test channels, then switch the two IDs to the real channels.
+7. Run against live chains with both pads posting to private test channels, then switch the two IDs to the real channels. -->
+
+# Grad Bot: Long + Bankr (Robinhood Chain)
+
+Telegram bot that watches two launchpads on Robinhood Chain over one WSS RPC and posts graduated tokens. Long and Bankr each post to their own channel.
+
+| Launchpad       | Chain           | Stack                                                      | "Graduated" means                                       |
+| --------------- | --------------- | ---------------------------------------------------------- | ------------------------------------------------------- |
+| Long (long.xyz) | Robinhood Chain | Doppler Airlock + Uniswap v4, paired against stock tokens  | Epoch ended and liquidity migrated                      |
+| Bankr           | Robinhood Chain | Doppler Airlock + `DopplerHookInitializer` (v4 multicurve) | Pool reached its target tick (`graduate()` or inferred) |
+
+Base is out of scope. Bankr Base launches use `NoOpMigrator` and never graduate.
+
+Runs for a short period only. Keep it small: one process, one chain watcher with two handlers, one poster, local state file.
+
+---
+
+## Config
+
+```env
+TELEGRAM_BOT_TOKEN=
+LONG_CHANNEL_ID=                # bot must be admin in both channels
+BANKR_CHANNEL_ID=
+
+RH_WSS_URL=                     # Robinhood Chain WSS RPC
+
+BANKR_GRAD_MODE=curve           # curve | mcap
+BANKR_MCAP_USD=100000           # only used when mode=mcap
+BANKR_TRACK_TTL_HOURS=48        # stop tracking a pool after this with no graduation
+
+RH_GETLOGS_CHUNK=1000           # RH provider times out on larger ranges
+STATE_FILE=./state.json
+```
+
+---
+
+## Contracts (all Robinhood Chain)
+
+| Contract               | Address                                      | Used by          |
+| ---------------------- | -------------------------------------------- | ---------------- |
+| Doppler Airlock        | `0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862` | Long + Bankr     |
+| Launcher / factory     | `0x22e99278308b393ea1260859b181ad7e78f5eeed` | Long (+ others?) |
+| DopplerHookInitializer | `0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544` | Bankr            |
+| Uniswap v4 PoolManager | `0x8366a39cc670b4001a1121b8f6a443a643e40951` | Bankr            |
+
+The Airlock is shared. Every `Create` and `Migrate` on it must be attributed to Long, Bankr, or neither before anything else happens.
+
+Airlock:
+
+```solidity
+event Create(address asset, address indexed numeraire, address initializer, address poolOrHook);
+event Migrate(address indexed asset, address indexed pool);
+
+function getAssetData(address asset) view returns (
+  address numeraire, address timelock, address governance,
+  address liquidityMigrator, address poolInitializer, address pool,
+  address migrationPool, uint256 numTokensToSell, uint256 totalSupply,
+  address integrator
+);
+```
+
+Long factory:
+
+```solidity
+event Created(
+  address indexed asset,
+  address hook,
+  address creator,
+  bytes32 poolId,
+  uint256 epochStart,
+  uint256 epochEnd,
+  string name
+);
+```
+
+DopplerHookInitializer: `getState(asset)` (returns pool status, PoolKey, `farTick`), `graduate(asset)`, and a graduation event. Exact names and layout come from the verified source.
+
+v4 PoolManager:
+
+```solidity
+event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1,
+           uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee);
+```
+
+### Verify before hardcoding
+
+- [ ] Pull ABIs from the Robinhood explorer and compute topic0 hashes yourself. Don't trust the signatures above blindly.
+- [ ] `getAssetData` layout on this Airlock deployment (field count and order).
+- [ ] DopplerHookInitializer: exact graduation event name/args, `getState` return layout, and the status enum value that means graduated.
+- [ ] Bankr filter: which field marks a launch as Bankr's. Candidates: `integrator` from `getAssetData`, `initializer == 0x4e34…a544` in `Create`, or the `create()` calldata/tx `to`. Check that Long does **not** also use `0x4e34…a544`, or the initializer alone won't separate them.
+- [ ] Does `0x22e9…eeed` emit `Created` for Bankr launches too? If yes, filter Long by the same field as above.
+- [ ] Bankr migrator: read `liquidityMigrator` for a few Bankr assets. NoOp means `Migrate` never fires for Bankr and the initializer event / tick rule carry graduation.
+- [ ] Sanity check: take one Bankr token that pumped hard and call `getState`. Graduated status means someone calls `graduate()`; tick past `farTick` with status unchanged means nobody does and the tick rule does all the work.
+- [ ] Confirm chain ID and that the provider supports `eth_subscribe`.
+
+---
+
+## Architecture
+
+```
+                 ┌─► LongHandler ──┐                                 ┌──► LONG_CHANNEL_ID
+ RH WSS ──► Watcher                ├─► Graduated{…} ─► Dedup ─► Poster ─┤
+                 └─► BankrHandler ─┘                                 └──► BANKR_CHANNEL_ID
+                          ▲
+            state.json (lastBlock, tracked tokens, posted set)
+```
+
+One connection, one `lastBlock`, one backfill path. The watcher fans logs out by address/topic0; shared Airlock logs go to whichever handler owns the asset.
+
+```ts
+type Graduated = {
+  pad: "long" | "bankr";
+  token: Address;
+  name: string;
+  symbol: string;
+  numeraire: Address; // Long: stock token (NVDA…). Bankr: WETH or a stock token
+  pool: Address | Hex; // pool address or v4 PoolId
+  creator?: Address;
+  how: "migrate" | "graduate" | "tick" | "mcap" | "epoch";
+  launchedAt: number;
+  graduatedAt: number;
+  txHash?: Hex; // omitted when inferred from state
+};
+```
+
+---
+
+## Subscriptions
+
+| Filter                                         | Purpose                          |
+| ---------------------------------------------- | -------------------------------- |
+| Long factory, topic0 = `Created`               | Long launches                    |
+| Airlock, topic0 ∈ {`Create`, `Migrate`}        | Bankr launches, both graduations |
+| Initializer `0x4e34…`, topic0 = graduation evt | Bankr graduation (primary)       |
+| PoolManager, topic0 = `Swap`, topic1 ∈ PoolIds | Bankr tick/mcap rule (fallback)  |
+| `newHeads`                                     | Heartbeat                        |
+
+---
+
+## LongHandler
+
+1. On `Created`: store `{asset, poolId, epochStart, epochEnd, creator, name}` in `tracked.long`.
+2. Primary graduation: Airlock `Migrate` where `asset ∈ tracked.long`. Emit `Graduated` (`how: "migrate"`).
+3. Fallback: timer at `epochEnd + 30s`. Call `getAssetData(asset)`. If pool/migrator state shows completion, emit (`how: "epoch"`). Otherwise retry every 60s for 10 min, then drop.
+4. Enrich: `symbol()`, `decimals()`, and `symbol()` on the numeraire ("paired with NVDA").
+
+Long completes on time, not reserves. No swap watching.
+
+---
+
+## BankrHandler
+
+1. On Airlock `Create`: drop it unless the Bankr filter matches and the asset isn't Long's.
+2. Read `getState(asset)` once: PoolKey → PoolId, `farTick`, current status. If already graduated, emit immediately (backfill case). Store `{asset, numeraire, poolId, farTick, assetIsCurrency0, totalSupply, createdAt}` in `tracked.bankr`. Rebuild the `Swap` topic1 filter.
+3. Graduation, first signal wins:
+   - **Initializer graduation event** for a tracked asset → `how: "graduate"`.
+   - **Airlock `Migrate`** for a tracked asset (only if Bankr uses a real migrator) → `how: "migrate"`.
+   - **Swap rule** on each `Swap` for a tracked PoolId:
+     - `BANKR_GRAD_MODE=curve` (default): graduated when `tick` reaches `farTick` in the direction the asset gets more expensive (`assetIsCurrency0` → tick rising, else falling) → `how: "tick"`. This is the condition `graduate()` itself checks, so it catches tokens nobody calls `graduate()` on.
+     - `BANKR_GRAD_MODE=mcap`: price from `sqrtPriceX96` (invert if asset is currency1) × numeraire USD × `totalSupply` ≥ `BANKR_MCAP_USD` → `how: "mcap"`. Needs a USD price for the numeraire: WETH from a WETH/USDC v4 pool on RH, refreshed every 60s. Stock-paired launches need a stock-token price source; skip them in mcap mode until there is one.
+   - Ignore swaps in the first 10s after launch (decaying anti-snipe fee makes early prints noisy).
+4. On graduation: emit `Graduated`, remove from `tracked.bankr`, rebuild the `Swap` filter.
+5. Prune pools with no graduation after `BANKR_TRACK_TTL_HOURS`.
+
+---
+
+## WSS reliability
+
+- Store `lastBlock` in `state.json`; update after each processed log.
+- On disconnect: back off (1s, 2s, 4s, capped at 30s), reconnect, then `eth_getLogs(lastBlock+1 → latest)` with every filter above **before** resubscribing. Process backfill, then go live.
+- Backfill in `RH_GETLOGS_CHUNK` ranges. On timeout, halve the chunk and retry.
+- Heartbeat: no `newHeads` for 30s → dead, force reconnect.
+- Ignore `removed: true` logs.
+
+---
+
+## Dedup & state
+
+```json
+{
+  "lastBlock": 0,
+  "tracked": { "long": {}, "bankr": {} },
+  "posted": ["long:0x…", "bankr:0x…"]
+}
+```
+
+- Key = `${pad}:${token}`. Skip if already in `posted`. Multiple graduation signals for one token collapse here.
+- Atomic writes (tmp + rename). Flush every 5s and on SIGINT/SIGTERM.
+- Migrating from the old two-chain state: drop `lastBlock.base` and any Base entries in `tracked.bankr`; start `lastBlock` from the old `lastBlock.robinhood`.
+
+---
+
+## Telegram post
+
+Route by `pad`. One bot token serves both channels.
+
+```
+🎓 GRADUATED · LONG
+$SYMBOL — Name
+Paired: NVDA
+CA: 0x…
+Creator: 0x…
+Launched → graduated: 2h 14m
+
+[Chart] [Explorer] [Long]
+```
+
+```
+🎓 GRADUATED · BANKR
+$SYMBOL — Name
+Paired: WETH            (or the stock token)
+Signal: graduate()      (or: curve end reached / mcap ≥ $100k / migrated)
+CA: 0x…
+MC: $123k               (only when numeraire has a USD price)
+Launched → graduated: 47m
+
+[Chart] [Explorer] [Bankr]
+```
+
+- `parse_mode=HTML`, escape names (user input), disable link previews.
+- Links go in inline keyboard buttons, not the body.
+- One queue per channel. ≤1 msg/s and ~20/min per channel, under ~30 msg/s overall. On 429, honor `retry_after` for that channel only.
+
+---
+
+## Logging
+
+- One line per event: `pad kind token block tx`.
+- Every 5 min: tracked counts per pad, `lastBlock`/head, WSS uptime.
+
+---
+
+## Build order
+
+1. Config + state + poster (test message to each channel).
+2. Single RH watcher: subscribe, heartbeat, backfill. Log every filter, no handlers.
+3. Run the verify checklist against live logs: topic0s, Bankr filter, `getState` layout, migrator, sanity-check token.
+4. Long: `Created` → `Migrate` → epochEnd fallback.
+5. Bankr: `Create` + filter → `getState` tracking → initializer event → `Swap` tick rule.
+6. Dedup and reconnect hardening.
+7. Live run into private test channels, then switch both IDs to the real channels.

@@ -14,24 +14,9 @@ function num(name: string, def: number): number {
   return v;
 }
 
-function bool(name: string, def: boolean): boolean {
-  const v = env(name);
-  return v === undefined ? def : /^(1|true|yes|on)$/i.test(v);
-}
-
 const addr = (name: string, def: string) => (env(name) ?? def).toLowerCase() as Address;
 
-const list = (name: string) =>
-  (env(name) ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean) as Address[];
-
-function gradMode(): "curve" | "mcap" {
-  const v = env("BANKR_GRAD_MODE") ?? "curve";
-  if (v !== "curve" && v !== "mcap") throw new Error("BANKR_GRAD_MODE must be curve or mcap");
-  return v;
-}
+const gradMultiple = num("GRAD_MULTIPLE", 10);
 
 // Required values are getters so `--test` only needs the Telegram vars.
 export const config = {
@@ -39,46 +24,38 @@ export const config = {
   get longChannel() { return req("LONG_CHANNEL_ID"); },
   get bankrChannel() { return req("BANKR_CHANNEL_ID"); },
   get rhWss() { return req("RH_WSS_URL"); },
-  get baseWss() { return req("BASE_WSS_URL"); },
 
-  longEnabled: bool("LONG_ENABLED", true),
-  bankrEnabled: bool("BANKR_ENABLED", true),
-
-  bankrGradMode: gradMode(),
-  bankrMcapUsd: num("BANKR_MCAP_USD", 100_000),
-  bankrTtlHours: num("BANKR_TRACK_TTL_HOURS", 48),
+  // Graduated = price reached N× its launch price (in the numeraire), per pad.
+  gradMultiple: {
+    long: num("LONG_GRAD_MULTIPLE", gradMultiple),
+    bankr: num("BANKR_GRAD_MULTIPLE", gradMultiple),
+  },
+  trackTtlHours: num("TRACK_TTL_HOURS", num("BANKR_TRACK_TTL_HOURS", 48)),
+  ignoreSwapsAfterLaunchS: num("IGNORE_SWAPS_AFTER_LAUNCH_S", 10), // anti-snipe fee makes early prints noisy
 
   stateFile: env("STATE_FILE") ?? "./state.json",
-  getLogsChunk: num("GETLOGS_CHUNK", 2000),
-  maxBackfillBlocks: num("MAX_BACKFILL_BLOCKS", 50_000),
+  getLogsChunk: num("RH_GETLOGS_CHUNK", 1000), // provider allows ~1001 blocks for older ranges
+  maxBackfillBlocks: num("MAX_BACKFILL_BLOCKS", 100_000), // ~2.8h at ~0.1s blocks
 
-  long: {
-    factory: addr("LONG_FACTORY", "0x22e99278308b393ea1260859b181ad7e78f5eeed"),
-    airlock: addr("LONG_AIRLOCK", "0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862"),
-    fallbackLookback: num("LONG_FALLBACK_LOOKBACK_BLOCKS", 20_000),
-    postOnEpochEnd: bool("LONG_POST_ON_EPOCH_END", false),
-  },
-
-  bankr: {
-    airlock: addr("BANKR_AIRLOCK", "0x660eAaEdEBc968f8f3694354FA8EC0b4c5Ba8D12"),
-    poolManager: addr("BASE_POOL_MANAGER", "0x498581fF718922c3f8e6A244956aF099B2652b2b"),
-    initializers: list("BANKR_INITIALIZERS"),
-    integrator: env("BANKR_INTEGRATOR")?.toLowerCase() as Address | undefined,
-    swapTopicChunk: num("BANKR_SWAP_TOPIC_CHUNK", 200),
-    weth: addr("BASE_WETH", "0x4200000000000000000000000000000000000006"),
-    usdc: addr("BASE_USDC", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
-    wethUsdcPool: addr("BASE_WETH_USDC_POOL", "0xd0b53D9277642d899DF5C87A3966A349A798F224"),
+  // Robinhood Chain (4663)
+  airlock: addr("AIRLOCK", "0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862"),
+  initializer: addr("INITIALIZER", "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"), // DopplerHookInitializer
+  poolManager: addr("POOL_MANAGER", "0x8366a39cc670b4001a1121b8f6a443a643e40951"),
+  // Airlock getAssetData().integrator is the only field that separates the pads (same initializer).
+  integrators: {
+    long: addr("LONG_INTEGRATOR", "0x92d435c96e63c43e12d6d0ab28f6b0b04072f765"),
+    bankr: addr("BANKR_INTEGRATOR", "0xae478d7652b1ca5da070aa8563fce1570b420db5"),
   },
 
   links: {
     long: {
       chart: env("LONG_CHART_URL") ?? "https://dexscreener.com/robinhood/{token}",
-      explorer: env("LONG_EXPLORER_URL") ?? "https://explorer.chain.robinhood.com/token/{token}",
-      site: env("LONG_SITE_URL") ?? "https://long.xyz/token/{token}",
+      explorer: env("LONG_EXPLORER_URL") ?? "https://robinhoodchain.blockscout.com/token/{token}",
+      site: env("LONG_SITE_URL") ?? "https://app.long.xyz/token/{token}",
     },
     bankr: {
-      chart: env("BANKR_CHART_URL") ?? "https://dexscreener.com/base/{token}",
-      explorer: env("BANKR_EXPLORER_URL") ?? "https://basescan.org/token/{token}",
+      chart: env("BANKR_CHART_URL") ?? "https://dexscreener.com/robinhood/{token}",
+      explorer: env("BANKR_EXPLORER_URL") ?? "https://robinhoodchain.blockscout.com/token/{token}",
       site: env("BANKR_SITE_URL") ?? "https://bankr.bot/launches/{token}",
     },
   },

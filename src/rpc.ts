@@ -163,7 +163,7 @@ export class WssRpc {
   }
 
   async subscribe(params: unknown[], handler: (result: any) => void): Promise<string> {
-    const id = await this.request<string>("eth_subscribe", params);
+    const id = await this.request<string>("eth_subscribe", params, 10_000); // a stuck subscribe means a bad connection: fail fast
     this.subs.set(id, handler);
     return id;
   }

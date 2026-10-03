@@ -15,11 +15,17 @@ export function duration(seconds: number) {
   return `${s}s`;
 }
 
-export function usd(n: number) {
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${Math.round(n / 1e3)}k`;
-  return `$${Math.round(n)}`;
+function signal(g: Graduated) {
+  switch (g.how) {
+    case "multiple":
+      return `${g.multiple && g.multiple < 100 ? g.multiple.toFixed(1) : Math.round(g.multiple ?? 0)}× since launch`;
+    case "graduate":
+      return "graduate()";
+    case "migrate":
+      return "migrated";
+    case "tick":
+      return "curve end reached";
+  }
 }
 
 function buttons(g: Graduated, pairs: [string, string][]): Button[] {
@@ -30,31 +36,21 @@ function buttons(g: Graduated, pairs: [string, string][]): Button[] {
 }
 
 export function formatGraduated(g: Graduated): Message {
-  const head = [`🎓 <b>GRADUATED · ${g.pad.toUpperCase()}</b>`, `<b>$${esc(g.symbol)}</b> — ${esc(g.name)}`];
-
-  if (g.pad === "long") {
-    const l = config.links.long;
-    return {
-      text: [
-        ...head,
-        `Paired: ${esc(g.pairedSymbol ?? g.numeraire)}`,
-        `CA: <code>${g.token}</code>`,
-        ...(g.creator ? [`Creator: <code>${g.creator}</code>`] : []),
-        `Launched → graduated: ${duration(g.graduatedAt - g.launchedAt)}`,
-      ].join("\n"),
-      buttons: buttons(g, [["Chart", l.chart], ["Explorer", l.explorer], ["Long", l.site]]),
-    };
-  }
-
-  const b = config.links.bankr;
-  const rule = g.rule === "mcap" ? `mcap ≥ ${usd(config.bankrMcapUsd)}` : "curve exhausted";
+  const l = config.links[g.pad];
   return {
     text: [
-      ...head,
-      `Rule: ${esc(rule)}`,
+      `🎓 <b>GRADUATED · ${g.pad.toUpperCase()}</b>`,
+      `<b>$${esc(g.symbol)}</b> — ${esc(g.name)}`,
+      `Paired: ${esc(g.pairedSymbol ?? g.numeraire)}`,
+      `Signal: ${esc(signal(g))}`,
       `CA: <code>${g.token}</code>`,
-      ...(g.mcapUsd !== undefined ? [`MC: ${usd(g.mcapUsd)}`] : []),
+      ...(g.creator ? [`Creator: <code>${g.creator}</code>`] : []),
+      `Launched → graduated: ${duration(g.graduatedAt - g.launchedAt)}`,
     ].join("\n"),
-    buttons: buttons(g, [["Chart", b.chart], ["Basescan", b.explorer], ["Bankr", b.site]]),
+    buttons: buttons(g, [
+      ["Chart", l.chart],
+      ["Explorer", l.explorer],
+      [g.pad === "long" ? "Long" : "Bankr", l.site],
+    ]),
   };
 }
