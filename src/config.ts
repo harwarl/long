@@ -59,11 +59,13 @@ export const config = {
       chart: env("LONG_CHART_URL") ?? "https://dexscreener.com/robinhood/{token}",
       explorer: env("LONG_EXPLORER_URL") ?? "https://robinhoodchain.blockscout.com/token/{token}",
       site: env("LONG_SITE_URL") ?? "", // token page path unknown (/token/<addr> is a 404); set LONG_SITE_URL once known
+      fomo: env("LONG_FOMO_URL") ?? "https://fomo.family/tokens/robinhood/{token}",
     },
     bankr: {
       chart: env("BANKR_CHART_URL") ?? "https://dexscreener.com/robinhood/{token}",
       explorer: env("BANKR_EXPLORER_URL") ?? "https://robinhoodchain.blockscout.com/token/{token}",
       site: env("BANKR_SITE_URL") ?? "https://bankr.bot/launches/{token}",
+      fomo: env("BANKR_FOMO_URL") ?? "https://fomo.family/tokens/robinhood/{token}",
     },
   },
 };

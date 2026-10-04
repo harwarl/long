@@ -51,6 +51,7 @@ export function formatGraduated(g: Graduated): Message {
       ["Chart", l.chart],
       ["Explorer", l.explorer],
       [g.pad === "long" ? "Long" : "Bankr", l.site],
+      ["FOMO", l.fomo],
     ]),
   };
 }

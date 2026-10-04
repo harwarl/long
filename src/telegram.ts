@@ -11,6 +11,9 @@ const MAX_TRIES = 5;
 
 let globalNext = 0;
 
+/** One row up to 3 buttons; 2 per row beyond that so labels stay readable on phones. */
+const rows = (b: Button[]) => (b.length <= 3 ? [b] : Array.from({ length: Math.ceil(b.length / 2) }, (_, i) => b.slice(i * 2, i * 2 + 2)));
+
 type SendResult = { ok: true } | { ok: false; retryAfter?: number; error: string };
 
 async function sendMessage(token: string, chatId: string, m: Message): Promise<SendResult> {
@@ -23,7 +26,7 @@ async function sendMessage(token: string, chatId: string, m: Message): Promise<S
         text: m.text,
         parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
-        ...(m.buttons.length ? { reply_markup: { inline_keyboard: [m.buttons] } } : {}),
+        ...(m.buttons.length ? { reply_markup: { inline_keyboard: rows(m.buttons) } } : {}),
       }),
       signal: AbortSignal.timeout(15_000),
     });
